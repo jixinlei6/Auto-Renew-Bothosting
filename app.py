@@ -490,16 +490,34 @@ def main():
                 send_telegram_message(format_notification("❌ 续期失败", error="Turnstile 验证未通过"))
                 return
 
-            # 点击续期按钮
-            print("⏳ 等待续期按钮可用并点击...")
-            time.sleep(5) 
+            # 点击续期按钮：等待人机验证回调解锁后再点击（修复点击禁用按钮无效的问题）
+            print("? 等待续期按钮解锁并点击...")
+            time.sleep(5)
 
             modal_button_clicked = False
             try:
-                selector = 'div[role="dialog"] button.btn-primary' 
-                sb.click(selector, timeout=8)
-                modal_button_clicked = True
-                print("✅ 已点击续期按钮")
+                selector = 'div[role="dialog"] button.btn-primary'
+                deadline = time.time() + 45
+                while time.time() < deadline:
+                    try:
+                        btn = sb.find_element(selector)
+                        if btn and not btn.get_attribute("disabled") and btn.get_attribute("aria-disabled") != "true":
+                            btn.click()
+                            modal_button_clicked = True
+                            print("? 已点击续期按钮（按钮已解锁）")
+                            break
+                    except Exception:
+                        pass
+                    try:
+                        if wait_turnstile_present(sb):
+                            handle_turnstile(sb)
+                    except Exception:
+                        pass
+                    time.sleep(3)
+                if not modal_button_clicked:
+                    sb.click(selector, timeout=8)
+                    modal_button_clicked = True
+                    print("? 已点击续期按钮（兜底直接点击）")
             except Exception as e:
                 print(f"续期按钮点击失败: {e}")
 
@@ -573,3 +591,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
