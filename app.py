@@ -547,20 +547,92 @@ def main():
                     )
                 )
             else:
-                if new_expiry and new_expiry != current_expiry:
-                    print(f"✅ 续期成功，到期日期已更新为: {new_expiry}")
+                # 到期日未变化：自动重试整个续期弹窗流程（重开弹窗 -> 过 Turnstile -> 解锁点击 -> 验证），最多 3 次
+                retry_success = False
+                possible_selectors2 = [
+                    'type:button("Renew free plan")',
+                    'button:contains("Renew free plan")',
+                    '[class*="btn btn-primary btn-sm"]',
+                ]
+                for retry_i in range(1, 4):
+                    print(f"? 第 {retry_i}/3 次自动重试续期流程...")
+                    try:
+                        sb.refresh()
+                        sb.wait_for_ready_state_complete()
+                        sb.sleep(4)
+                        outer_sel = None
+                        for sel2 in possible_selectors2:
+                            try:
+                                if sb.is_element_visible(sel2):
+                                    outer_sel = sel2
+                                    break
+                            except Exception:
+                                pass
+                        if not outer_sel:
+                            print("? 重试时未找到续期按钮，跳过本轮")
+                            continue
+                        sb.click(outer_sel)
+                        sb.sleep(10)
+                        if wait_turnstile_present(sb):
+                            handle_turnstile(sb)
+                        selector = 'div[role="dialog"] button.btn-primary'
+                        deadline2 = time.time() + 40
+                        clicked2 = False
+                        while time.time() < deadline2:
+                            try:
+                                btn = sb.find_element(selector)
+                                if btn and not btn.get_attribute("disabled") and btn.get_attribute("aria-disabled") != "true":
+                                    btn.click()
+                                    clicked2 = True
+                                    print("? 已点击续期按钮（按钮已解锁）")
+                                    break
+                            except Exception:
+                                pass
+                            try:
+                                if wait_turnstile_present(sb):
+                                    handle_turnstile(sb)
+                            except Exception:
+                                pass
+                            time.sleep(3)
+                        if not clicked2:
+                            sb.click(selector, timeout=8)
+                        sb.sleep(5)
+                        sb.refresh()
+                        sb.wait_for_ready_state_complete()
+                        sb.sleep(3)
+                        try:
+                            chk_text = sb.get_page_text() + "\n" + sb.get_page_source()
+                        except Exception:
+                            chk_text = sb.get_page_source()
+                        chk_expiry = get_expiry_from_dom(sb) or extract_expiry_date(chk_text)
+                        if chk_expiry and chk_expiry != current_expiry:
+                            new_expiry = chk_expiry
+                            print(f"? 重试成功，到期日期已更新为: {new_expiry}")
+                            retry_success = True
+                            break
+                        if re.search(r"(?:Renewal cooldown|Renew in)\s+(\d{1,2}:\d{2}:\d{2})", chk_text):
+                            new_expiry = chk_expiry or new_expiry
+                            print("? 重试成功！检测到续期冷却倒计时")
+                            retry_success = True
+                            break
+                        print(f"? 重试第 {retry_i} 次后到期日仍未变化: {chk_expiry}")
+                    except Exception as e:
+                        print(f"? 重试第 {retry_i} 次异常: {e}")
+                    time.sleep(3)
+                if retry_success:
+                    print(f"? 续期成功，最终到期日期: {new_expiry}")
                     send_telegram_message(
                         format_notification(
-                            "✅ 续期成功",
-                            extra="到期日期已更新",
+                            "? 续期成功",
+                            extra="到期日期已更新（含自动重试）",
                             expiry_date=new_expiry
                         )
                     )
                 else:
-                    print("⚠️ 续期结果未知，到期日期未变化，请手动检查")
+                    print("?? 续期结果未知，到期日期未变化，请手动检查")
                     send_telegram_message(
                         format_notification(
-                            "⚠️ 续期可能未成功",
+                            "?? 续期可能未成功",
                             extra="请登录后台检查",
                             expiry_date=current_expiry or "（未获取到）"
                         )
